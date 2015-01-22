@@ -1,33 +1,34 @@
 library(RODBC)
+library(dplyr)
 
+## Scarica i dati da DB
 conn <- odbcConnect('Soccer')
-
 olanda <- sqlFetch(conn,'niederlande')
-# olanda$team <- as.character(olanda$team)
-# olanda$GS <- as.numeric(olanda$GS)
-# olanda$GF <- as.numeric(olanda$GF)
-# olanda$anno <- as.factor(olanda$anno)
-# olanda$casa <- as.factor(olanda$casa)
-# 
-# PSV <- filter(olanda, grepl('NAC', team))
-# mediaGSP <- PSV %>% group_by(anno,casa) %>% summarize(goalFatti = mean(GF, na.rm = T), goalSubiti = mean(GS, na.rm = T))
-# 
-# Ajax <- filter(olanda, grepl('Dord', team))
-# mediaGSA <- Ajax %>% group_by(anno,casa) %>% summarize(goalFatti = mean(GF, na.rm = T), goalSubiti = mean(GS, na.rm = T))
+odbcCloseAll()
 
-champ <- filter(olanda, anno==2015)
-champ <- champ %>% group_by(team,casa) %>% summarize(goalFatti = mean(GF, na.rm = T), goalSubiti = mean(GS, na.rm = T))
+## Metodi di stima dei goal fatti e ricevuti da ciascuna squadra
 
-partitaA <- function(teamA, teamB)
+## Dataset con medie di goal fatti e subiti
+## SOLO ULTIMO ANNO
+champ <- olanda %>% 
+  filter(anno==2015) %>% 
+  group_by(team,casa) %>% 
+  summarize(goalFatti = mean(GF, na.rm = T), goalSubiti = mean(GS, na.rm = T))
+
+
+## Media semplice dei goal fatti e ricevuti da ciascuna squadra
+play_goal <- function(teamA, teamB)
 {
   A <- champ[which(grepl(teamA, champ$team) & champ$casa==1),]
   B <- champ[which(grepl(teamB, champ$team) & champ$casa==2),]
   
-  a <- ((A$goalFatti + 9*B$goalSubiti)/10) + ((B$goalFatti + 9*A$goalSubiti)/10)
+  a <- (A$goalFatti + B$goalSubiti)/2 + (B$goalFatti + A$goalSubiti)/2
   return(a)
 }
 
-partitaB <- function(teamA, teamB)
+
+## Maggiore peso ai goal fatti da ciascuna squadra
+play_goalFatti <- function(teamA, teamB)
 {
   A <- champ[which(grepl(teamA, champ$team) & champ$casa==1),]
   B <- champ[which(grepl(teamB, champ$team) & champ$casa==2),]
@@ -36,45 +37,92 @@ partitaB <- function(teamA, teamB)
   return(a)
 }
 
-partitaC <- function(teamA, teamB)
+
+## Maggiore peso ai goal subiti da ciascuna squadra
+play_goalSubiti <- function(teamA, teamB)
 {
   A <- champ[which(grepl(teamA, champ$team) & champ$casa==1),]
   B <- champ[which(grepl(teamB, champ$team) & champ$casa==2),]
   
-  a <- ((A$goalFatti + 0*B$goalSubiti)) + ((B$goalFatti + 0*A$goalSubiti))
+  a <- ((A$goalFatti + 9*B$goalSubiti)/10) + ((B$goalFatti + 9*A$goalSubiti)/10)
   return(a)
 }
 
-partitaD <- function(teamA, teamB)
+
+## Conta solo goal fatti da ciascuna squadra
+play_soloGoalFatti <- function(teamA, teamB)
 {
   A <- champ[which(grepl(teamA, champ$team) & champ$casa==1),]
   B <- champ[which(grepl(teamB, champ$team) & champ$casa==2),]
   
-  a <- ((0*A$goalFatti + B$goalSubiti)) + ((0*B$goalFatti + A$goalSubiti))
+  a <- (A$goalFatti + 0*B$goalSubiti) + (B$goalFatti + 0*A$goalSubiti)
   return(a)
 }
 
-partitaZ <- function(teamA, teamB)
+
+## Conta solo goal ricevuti da ciascuna squadra
+play_soloGoalSubiti <- function(teamA, teamB)
 {
   A <- champ[which(grepl(teamA, champ$team) & champ$casa==1),]
   B <- champ[which(grepl(teamB, champ$team) & champ$casa==2),]
   
-  a <- (3*(A$goalFatti + B$goalSubiti)) + ((B$goalFatti + A$goalSubiti))
+  a <- (0*A$goalFatti + B$goalSubiti) + (0*B$goalFatti + A$goalSubiti)
   return(a)
 }
-res <- apply(X = filter(olanda, casa==1), MARGIN = 1, function(x) partitaZ(x['team'], x['avversario']))
-
-comp <- cbind(mutate(filter(olanda, casa==1), officiale = GF + GS), atteso = res)
-comp$U <- ifelse(comp$officiale>=2.5, 'O', 'U')
-comp$A <- ifelse(comp$atteso>=2.5, 'O', 'U')
-
-nrow(filter(comp, A!=U))
 
 
+## Maggiore peso alla sqadra di casa
+play_Casa <- function(teamA, teamB)
+{
+  A <- champ[which(grepl(teamA, team) & champ$casa==1),]
+  B <- champ[which(grepl(teamB, team) & champ$casa==2),]
+  
+  a <- 3*(A$goalFatti + B$goalSubiti) + (B$goalFatti + A$goalSubiti)
+  return(a)
+}
 
-rating <- rating %>% mutate(gruppo = ifelse(goalFatti > mean(goalFatti) & goalSubiti <= mean(goalSubiti), 'A', ifelse(goalFatti > mean(goalFatti) & goalSubiti > mean(goalSubiti), 'B', ifelse(goalFatti <= mean(goalFatti) & goalSubiti <= mean(goalSubiti), 'C', ifelse(goalFatti <= mean(goalFatti) & goalSubiti > mean(goalSubiti),'D','E')))))
 
-partitaE <- function(teamA, teamB) {
+#Maggiore peso alla squadra ospite
+play_Ospiti <- function(teamA, teamB)
+{
+  A <- champ[which(grepl(teamA, team) & champ$casa==1),]
+  B <- champ[which(grepl(teamB, team) & champ$casa==2),]
+  
+  a <- (A$goalFatti + B$goalSubiti) + 3*(B$goalFatti + A$goalSubiti)
+  return(a)
+}
+
+
+## Controlla quante volte la previsione sbaglia
+## TUTTI I 5 ANNI
+checkRes_numerico <- function (data, partita) {
+  res <- unlist(apply(X = data, MARGIN = 1, function(x) partita(x['team'], x['avversario'])))
+  comp <- cbind(mutate(data, officiale = GF + GS), atteso = unlist(res))
+  comp$U <- ifelse(comp$officiale>=2.5, 'O', 'U')
+  comp$A <- ifelse(comp$atteso>=3, 'O', 'U')
+  a <- nrow(filter(comp, A!=U))
+  return(a)
+}
+
+
+## Dataset con categorizzazione della squadra in 4 'divisioni'
+##            
+##            ATTACCO 
+##            \Forte\Debole\
+##  DIFESA  __\_____\_____\
+##      Forte \  A  \  B  \
+##          __\_____\_____\
+##      Debole\  C  \  D  \
+##            \     \     \
+##
+rating <- champ %>% 
+  mutate(gruppo = ifelse(goalFatti > mean(goalFatti) & goalSubiti <= mean(goalSubiti), 'A', 
+                         ifelse(goalFatti > mean(goalFatti) & goalSubiti > mean(goalSubiti), 'B', 
+                                ifelse(goalFatti <= mean(goalFatti) & goalSubiti <= mean(goalSubiti), 'C', 
+                                       ifelse(goalFatti <= mean(goalFatti) & goalSubiti > mean(goalSubiti),'D','E')))))
+
+## 
+play_gruppi1 <- function(teamA, teamB) {
   A <- rating[which(grepl(teamA, rating$team)),'gruppo']
   B <- rating[which(grepl(teamB, rating$team)),'gruppo']
   
@@ -83,23 +131,61 @@ partitaE <- function(teamA, teamB) {
   return(res)
 }
 
-partitaF <- function(teamA, teamB) {
-A <- rating[which(grepl(teamA, rating$team)),'gruppo']
-B <- rating[which(grepl(teamB, rating$team)),'gruppo']
-res <- as.character(ifelse(A=='A' & B == 'A', 'U', ifelse(A=='A' && B=='B', 'O', ifelse(A=='A' & B=='C', 'O',ifelse( A=='A' & B=='D', 'U', ifelse( A =='B', 'O', ifelse( A=='C' & B=='A', 'O', ifelse(A=='C' & B=='B', 'O', ifelse(A=='C' & B=='C', 'U', ifelse(A=='C' & B=='D', 'O', ifelse(A=='D' & B=='A', 'U', ifelse(A=='D' & B=='B', 'O', ifelse(A=='D' & B== 'C', 'O', ifelse(A=='D' & B=='D', 'O'))))))))))))))
-return(res)
-}
 
-
-partitaG <- function(teamA, teamB) {
-  A <- rating[which(grepl(teamA, rating$team), casa==1),'gruppo']
-  B <- rating[which(grepl(teamB, rating$team), casa==2),'gruppo']
+play_gruppi2 <- function(teamA, teamB) {
+  A <- rating[which(grepl(teamA, rating$team)),'gruppo']
+  B <- rating[which(grepl(teamB, rating$team)),'gruppo']
   res <- as.character(ifelse(A=='A' & B == 'A', 'U', ifelse(A=='A' && B=='B', 'O', ifelse(A=='A' & B=='C', 'O',ifelse( A=='A' & B=='D', 'U', ifelse( A =='B', 'O', ifelse( A=='C' & B=='A', 'O', ifelse(A=='C' & B=='B', 'O', ifelse(A=='C' & B=='C', 'U', ifelse(A=='C' & B=='D', 'O', ifelse(A=='D' & B=='A', 'U', ifelse(A=='D' & B=='B', 'O', ifelse(A=='D' & B== 'C', 'O', ifelse(A=='D' & B=='D', 'O'))))))))))))))
   return(res)
 }
 
 
-res <- apply(X = filter(olanda, casa==1), MARGIN = 1, function(x) partitaG(x['team'], x['avversario']))
+play_gruppi3 <- function(teamA, teamB) {
+  A <- rating[which(grepl(teamA, rating$team) & rating$casa==1),'gruppo']
+  B <- rating[which(grepl(teamB, rating$team) & rating$casa==2),'gruppo']
+  res <- as.character(ifelse(A=='A' & B == 'A', 'U', ifelse(A=='A' && B=='B', 'O', ifelse(A=='A' & B=='C', 'O',ifelse( A=='A' & B=='D', 'U', ifelse( A =='B', 'O', ifelse( A=='C' & B=='A', 'O', ifelse(A=='C' & B=='B', 'O', ifelse(A=='C' & B=='C', 'U', ifelse(A=='C' & B=='D', 'O', ifelse(A=='D' & B=='A', 'U', ifelse(A=='D' & B=='B', 'O', ifelse(A=='D' & B== 'C', 'O', ifelse(A=='D' & B=='D', 'O'))))))))))))))
+  return(res)
+}
 
-comp <- cbind(mutate(filter(olanda, casa==1), officiale = GF + GS), atteso = res)
-comp$U <- ifelse(comp$officiale>=2.5, 'O', 'U')
+
+checkRes_fattori <- function (data, partita) {
+  res <- unlist(apply(X = data, MARGIN = 1, function(x) partita(x['team'], x['avversario'])))
+  comp <- cbind(mutate(data, officiale = GF + GS), atteso = unlist(res))
+  comp$U <- ifelse(comp$officiale>=2.5, 'O', 'U')
+  a <- nrow(filter(comp, atteso!=U))
+  return(a)
+}
+
+
+prob <- olanda %>%
+  group_by(team, casa, GS, GF) %>%
+  summarize(freq = n()) %>%
+  mutate(prob = freq/sum(freq))
+
+
+play_probabil <- function(teamA,teamB){
+  prob_ <- ungroup(prob)
+  A <- filter(prob_, grepl(teamA, team), casa==1)
+  B <- filter(prob_, grepl(teamB, team), casa==2)
+  res <- full_join(A, B, by = c('GF' = 'GS', 'GS' = 'GF')) %>%
+    filter(GF+GS<3) %>%
+    transmute(GF, GS, prob = prob.x*prob.y) %>%
+    summarize(probabilità = sum(prob, na.rm = T))
+  
+  return(res)
+}
+
+checkRes_probabil <- function (data, partita) {
+  res <- unlist(apply(X = data, MARGIN = 1, function(x) partita(x['team'], x['avversario'])))
+  comp <- cbind(mutate(data, officiale = GF + GS), atteso = unlist(res))
+  comp$U <- ifelse(comp$officiale>=2.5, 'O', 'U')
+  comp$A <- ifelse(comp$atteso>0.5, 'U', 'O')
+  a <- nrow(filter(comp, A!=U))
+  return(a)
+}
+
+ultimiRis <- function(teamA, teamB) {
+  ris <- olanda %>%filter(grepl(teamA, team), grepl(teamB, avversario))
+  return(ris)
+}
+
