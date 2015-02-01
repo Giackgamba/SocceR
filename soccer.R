@@ -16,21 +16,19 @@ scraper <- function (nat, a, i) {
   odd <- c(1:nrow(results)*2-1)
   even <- c(1:nrow(results)*2)
   results <- results %>% 
-    mutate(goalFinali = unlist(strsplit(risultato, "[[:space:]]"))[odd], goalPrimoT = unlist(strsplit(risultato, "[[:space:]]"))[even]) %>%
-    mutate(goalPrimoT = gsub('\\(|\\)',replacement = '', goalPrimoT)) %>%
+    mutate(goalFinali = unlist(strsplit(gsub('\\*', replacement = '',risultato), "[[:space:]]"))[odd]) %>%
     mutate(goalCasaF = unlist(strsplit(goalFinali, ":"))[odd], goalOspitiF = unlist(strsplit(goalFinali, ":"))[even]) %>%
-    mutate(goalCasaPT = unlist(strsplit(goalPrimoT, ":"))[odd], goalOspitiPT = unlist(strsplit(goalPrimoT, ":"))[even]) %>%
     cbind(giornata = rep(i,nrow(results))) %>%
     cbind(anno = rep(a,nrow(results)))
   
   casa <- results %>% 
-    select(anno, giornata, team = casa, GF = goalCasaF, GS = goalOspitiF, avversario = ospiti) %>% 
-    bind_cols(casa = rep('1', nrow(results)))
+    select(anno, giornata, team = casa, GF = goalCasaF, GS = goalOspitiF, avversario = ospiti) %>%
+    cbind(casa = rep('1', nrow(results)))
   ospiti <- results %>% 
     select(anno, giornata, team = ospiti, GF = goalOspitiF, GS = goalCasaF, avversario = casa) %>% 
-    bind_cols(casa = rep('2', nrow(results)))
+    cbind(casa = rep('2', nrow(results)))
   giornata <- rbind(casa,ospiti)
-  cat(nat, a, i, '/n')
+  cat(nat, a, i, '\n')
   
   return(giornata)
 }
@@ -39,15 +37,18 @@ scraper <- function (nat, a, i) {
 conn <- odbcConnect('Soccer')
 
 #'italien','niederlande','tuerkei','belgien'
-for (nat in c('niederlande')) {
-  for (a in 2010:2015){    
-    for (i in 1:34) {
-      giornata <- scraper(nat, a, i)
-      sqlSave(conn, dat = giornata, tablename = nat, append = T, rownames = F )
-    }
-  }
-}
+# for (nat in c('niederlande')) {
+#   for (a in c(2008,2013)){    
+#     for (i in 1:34) {
+#       giornata <- scraper(nat, a, i)
+#       sqlSave(conn, dat = giornata, tablename = nat, append = T, rownames = F )
+#     }
+#   }
+# }
 
+a <- 2015
+i <- 19
+giornata <- scraper(nat, a, i)
 odbcCloseAll()
 
 
